@@ -213,7 +213,7 @@
     <span class="flabel">Périmètre</span>
     <div class="seg" id="seg-scope">
       <button data-v="all" class="on">Toutes les annonces</button>
-      <button data-v="active">Actives uniquement</button>
+      <button data-v="active">Présentes au dernier scan</button>
     </div>
   </div>
   <div class="fgroup">
@@ -254,9 +254,10 @@
 <!-- ============ 2. TAILLE ============ -->
 <section>
   <div class="section-head"><span class="section-num">02</span><h2>Distribution des vélos par taille</h2></div>
-  <p class="section-desc">Répartition des tailles de cadre ramenées à une échelle en centimètres. Les tailles
-  exprimées en lettres (S, M, L…) sont converties au centre de leur plage, ce qui crée des pics artificiels
-  sur les valeurs pivots — la courbe normale sert de repère, pas de modèle du marché.</p>
+  <p class="section-desc">Répartition par catégorie de taille, de XXS à XXL. Les annonces exprimées en centimètres
+  sont rattachées à la catégorie correspondante (54 à 56 cm → M, par exemple), les annonces déjà en lettres sont
+  reprises telles quelles. La courbe normale est ajustée sur l'échelle des catégories : elle sert de repère visuel,
+  pas de modèle du marché.</p>
   <div class="card">
     <h3>Nombre d'annonces par taille de cadre</h3>
     <p class="card-sub" id="size-sub"></p>
@@ -271,7 +272,8 @@
 <section>
   <div class="section-head"><span class="section-num">03</span><h2>Annonces actives par semaine</h2></div>
   <p class="section-desc">Une annonce compte pour une semaine dès qu'elle a été vue en ligne au moins un jour de
-  cette semaine. Choisissez la découpe pour lire la composition du stock disponible.</p>
+  cette semaine. Le total de la dernière semaine correspond donc au nombre d'annonces présentes au dernier scan,
+  augmenté de celles disparues en cours de semaine. Choisissez la découpe pour lire la composition du stock.</p>
   <div class="card">
     <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; margin-bottom:16px;">
       <div class="fgroup">
@@ -373,7 +375,7 @@
       <div>
         <p>Une annonce déjà en ligne au premier scan a commencé avant le début de la veille : sa durée réelle est
         plus longue que celle mesurée. Elle est exclue par défaut.</p>
-        <p>Les annonces encore en ligne aujourd'hui n'entrent pas dans le calcul : leur durée finale n'est pas
+        <p>Les annonces encore présentes au dernier scan n'entrent pas dans le calcul : leur durée finale n'est pas
         connue. La durée moyenne affichée est donc structurellement inférieure à la durée de vie réelle des annonces,
         surtout sur une fenêtre de veille courte.</p>
       </div>
@@ -390,6 +392,7 @@
     <li><b>Génération et modèle de frein</b> — déduits du titre et du descriptif de l'annonce quand la colonne n'existe pas dans le Sheet. Ajoutez une colonne « Génération » ou « Modèle de frein » au Sheet et elle sera utilisée en priorité.</li>
     <li><b>Perte de valeur</b> — pente d'une régression sur le logarithme du prix en fonction de l'âge, exprimée en % par an. Elle compare des vélos différents à un instant donné : ce n'est pas le suivi d'un même vélo dans le temps.</li>
     <li><b>Période</b> — le filtre de dates retient les annonces présentes en ligne au moins un jour dans l'intervalle choisi.</li>
+    <li><b>« Présentes au dernier scan »</b> — annonces revues lors du dernier passage du robot. La colonne « Encore en ligne » du Sheet reste à Oui pour les annonces sorties du filtre de veille (changement de prix, de catégorie…) : toujours en ligne quelque part, mais plus observées, donc plus comptées comme actives ici. C'est ce qui explique l'écart avec le total brut de la colonne.</li>
   </ul>
 </footer>
 
@@ -542,6 +545,8 @@ function normalizeSize(raw){
   if (LETTER_CM[s] !== undefined) return LETTER_CM[s];
   return null;
 }
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL'];
+const SIZE_RANGE = { XXS: '≤ 47 cm', XS: '48–50 cm', S: '51–53 cm', M: '54–56 cm', L: '57–59 cm', XL: '60–62 cm', XXL: '≥ 63 cm' };
 function sizeLabel(cm){
   if (cm == null) return NR;
   if (cm <= 47) return 'XXS';
@@ -722,7 +727,12 @@ function buildRows(raw){
   META.min = new Date(Math.min.apply(null, dates));
   META.max = new Date(Math.max.apply(null, dates));
   META.firstScan = new Date(Math.min.apply(null, rows.map(r => r.d1).filter(Boolean)));
+  META.lastScan = META.max;
   META.sources = Array.from(new Set(rows.map(r => r.source))).sort();
+  // « présente au dernier scan » : vue lors du dernier passage du robot.
+  // La colonne « Encore en ligne » reste à Oui pour les annonces sorties du filtre
+  // de veille : elles ne sont plus observées, on ne les compte donc pas comme actives.
+  rows.forEach(r => { r.seenLast = !!(r.d2 && +r.d2 === +META.lastScan); });
   return rows;
 }
 
@@ -732,7 +742,7 @@ function buildRows(raw){
 const F = { scope: 'all', from: null, to: null, source: '' };
 
 function passFilters(r){
-  if (F.scope === 'active' && !r.actif) return false;
+  if (F.scope === 'active' && !r.seenLast) return false;
   if (F.source && r.source !== F.source) return false;
   if (F.from && r.d2 && r.d2 < F.from) return false;
   if (F.to && r.d1 && r.d1 > F.to) return false;
@@ -894,12 +904,12 @@ function statstrip(id, items){
    ========================================================================== */
 function renderHero(){
   const rows = filtered();
-  const actives = ALL.filter(r => r.actif).length;
+  const actives = ALL.filter(r => r.seenLast).length;
   const ages = rows.map(r => r.age).filter(v => v != null);
   const prices = rows.map(r => r.prix).filter(v => v != null);
   const items = [
     { num: fmtN(ALL.length), lbl: 'annonces suivies depuis le début' },
-    { num: fmtN(actives), lbl: 'encore en ligne au dernier scan' },
+    { num: fmtN(actives), lbl: 'présentes au dernier scan du ' + isoDay(META.lastScan) },
     { num: ages.length ? median(ages).toFixed(1).replace('.', ',') + ' ans' : '—', lbl: 'âge médian (sélection courante)' },
     { num: prices.length ? fmtEUR(median(prices)) : '—', lbl: 'prix médian (sélection courante)' }
   ];
@@ -972,26 +982,23 @@ function renderAge(){
    ========================================================================== */
 function renderSize(){
   const rows = filtered();
-  const cms = rows.map(r => r.cm).filter(v => v != null);
+  const sized = rows.filter(r => r.cm != null).map(r => sizeLabel(r.cm));
   const sub = document.getElementById('size-sub');
-  if (!cms.length){
+  if (!sized.length){
     sub.textContent = 'Aucune taille exploitable dans cette sélection.';
     draw('chart-size', { type: 'bar', data: { labels: [], datasets: [] } });
     statstrip('size-stats', []);
     return;
   }
-  const lo = Math.max(40, Math.floor(quantile(cms, .01))), hi = Math.min(68, Math.ceil(quantile(cms, .99)));
-  const labels = [], counts = [];
-  for (let c = lo; c <= hi; c++){ labels.push(String(c)); counts.push(0); }
-  cms.forEach(c => { const i = Math.round(c) - lo; if (i >= 0 && i < counts.length) counts[i]++; });
-
-  const mu = mean(cms), sd = stdev(cms), med = median(cms);
-  const gauss = labels.map((_, i) => cms.length * normalPdf(lo + i, mu, sd));
+  const counts = SIZE_ORDER.map(l => sized.filter(v => v === l).length);
+  const idx = sized.map(v => SIZE_ORDER.indexOf(v));
+  const mu = mean(idx), sd = stdev(idx), med = median(idx);
+  const gauss = SIZE_ORDER.map((_, i) => sized.length * normalPdf(i, mu, sd));
 
   draw('chart-size', {
     type: 'bar',
     data: {
-      labels,
+      labels: SIZE_ORDER,
       datasets: [
         { type: 'bar', label: 'Annonces', data: counts, backgroundColor: rgba(C.steel, .78), borderWidth: 0, order: 2 },
         { type: 'line', label: 'Courbe normale ajustée', data: gauss, borderColor: C.amber, borderWidth: 2,
@@ -1001,26 +1008,34 @@ function renderSize(){
     options: {
       plugins: {
         legend: { position: 'bottom', labels: { boxWidth: 12, boxHeight: 12, padding: 16 } },
-        vline: { value: med - lo, label: 'médiane ' + med.toFixed(0) + ' cm (' + sizeLabel(med) + ')' },
-        tooltip: { callbacks: { title: it => 'Taille : ' + it[0].label + ' cm · ' + sizeLabel(+it[0].label) } }
+        vline: { value: med, label: 'médiane ' + SIZE_ORDER[Math.round(med)] },
+        tooltip: {
+          callbacks: {
+            title: it => 'Taille ' + it[0].label + ' · ' + SIZE_RANGE[it[0].label],
+            label: it => it.dataset.type === 'bar'
+              ? fmtN(it.parsed.y) + ' annonces (' + fmtPct(it.parsed.y / sized.length * 100, 1) + ')'
+              : 'Courbe normale : ' + Math.round(it.parsed.y)
+          }
+        }
       },
       scales: {
-        x: { title: { display: true, text: 'Taille de cadre (cm)' }, grid: { display: false } },
+        x: { title: { display: true, text: 'Taille de cadre' }, grid: { display: false } },
         y: { title: { display: true, text: "Nombre d'annonces" }, beginAtZero: true, grid: { color: C.line } }
       }
     }
   });
 
-  const counts2 = {};
-  rows.forEach(r => { if (r.cm != null){ const l = sizeLabel(r.cm); counts2[l] = (counts2[l] || 0) + 1; } });
-  const top = Object.entries(counts2).sort((a, b) => b[1] - a[1])[0];
+  const order = SIZE_ORDER.map((l, i) => ({ l, n: counts[i] })).sort((a, b) => b.n - a.n);
+  const top3 = order.slice(0, 3);
   statstrip('size-stats', [
-    { v: med.toFixed(0) + ' cm', k: 'taille médiane (' + sizeLabel(med) + ')' },
-    { v: mu.toFixed(1).replace('.', ',') + ' cm', k: 'taille moyenne' },
-    { v: '± ' + sd.toFixed(1).replace('.', ',') + ' cm', k: 'écart-type' },
-    { v: top ? top[0] + ' · ' + fmtN(top[1]) : '—', k: 'taille la plus fréquente' }
+    { v: SIZE_ORDER[Math.round(med)], k: 'taille médiane · ' + SIZE_RANGE[SIZE_ORDER[Math.round(med)]] },
+    { v: order[0].l, k: 'taille la plus fréquente (' + fmtPct(order[0].n / sized.length * 100, 0) + ' des annonces)' },
+    { v: fmtPct(top3.reduce((s, x) => s + x.n, 0) / sized.length * 100, 0), k: 'cumul ' + top3.map(x => x.l).join(' + ') },
+    { v: fmtN(sized.length), k: 'annonces avec une taille exploitable' }
   ]);
-  sub.textContent = fmtN(cms.length) + ' annonces avec une taille exploitable sur ' + fmtN(rows.length) + ' retenues.';
+  sub.textContent = fmtN(sized.length) + ' annonces avec une taille exploitable sur ' + fmtN(rows.length) +
+    ' retenues. Les tailles en centimètres sont rattachées à leur catégorie (' +
+    SIZE_ORDER.map(l => l + ' ' + SIZE_RANGE[l]).join(', ') + ').';
 }
 
 /* ==========================================================================
@@ -1217,7 +1232,7 @@ function renderComboSection(){
       scales: {
         x: { type: 'linear', title: { display: true, text: 'Année du modèle' },
              ticks: { stepSize: 1, callback: v => Number.isInteger(v) ? v : '' }, grid: { color: C.line } },
-        y: { title: { display: true, text: 'Prix affiché (€)' }, beginAtZero: false, grid: { color: C.line },
+        y: { title: { display: true, text: 'Prix affiché (€)' }, beginAtZero: true, min: 0, grid: { color: C.line },
              ticks: { callback: v => fmtN(v) + ' €' } }
       }
     }
@@ -1290,7 +1305,7 @@ function durationRows(comboSel){
     if (F.source && r.source !== F.source) return false;
     if (F.from && r.d2 && r.d2 < F.from) return false;
     if (F.to && r.d1 && r.d1 > F.to) return false;
-    if (r.actif) return false;                                   // durée non close
+    if (r.seenLast) return false;                                // annonce encore présente : durée non close
     if (r.duree == null) return false;
     if (censorMode === 'excl' && r.d1 && +r.d1 === +META.firstScan) return false;
     if (filterOutMode === 'excl' && r.retireDuFiltre) return false;
@@ -1357,12 +1372,12 @@ function renderDuration(){
   });
 
   const all = data.reduce((a, d) => a.concat(d.d), []);
-  const encore = ALL.filter(r => r.actif && (!F.source || r.source === F.source) && matchSel(r, list[0].sel)).length;
+  const encore = ALL.filter(r => r.seenLast && (!F.source || r.source === F.source) && matchSel(r, list[0].sel)).length;
   statstrip('duration-stats', [
     { v: all.length ? fmtDay(mean(all)) : '—', k: 'durée moyenne, toutes configurations affichées' },
     { v: all.length ? fmtDay(median(all)) : '—', k: 'durée médiane' },
     { v: fmtN(all.length), k: 'annonces terminées dans le calcul' },
-    { v: fmtN(encore), k: 'encore en ligne (durée inconnue)' }
+    { v: fmtN(encore), k: 'toujours en ligne au dernier scan (durée inconnue)' }
   ]);
 }
 

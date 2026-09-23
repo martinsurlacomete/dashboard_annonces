@@ -268,31 +268,15 @@
 
 <div class="roadline"></div>
 
-<!-- ============ 3. SEMAINES ============ -->
+<!-- ============ 3. PUBLICATIONS PAR JOUR ============ -->
 <section>
-  <div class="section-head"><span class="section-num">03</span><h2>Annonces actives par semaine</h2></div>
-  <p class="section-desc">Une annonce compte pour une semaine dès qu'elle a été vue en ligne au moins un jour de
-  cette semaine. Le total de la dernière semaine correspond donc au nombre d'annonces présentes au dernier scan,
-  augmenté de celles disparues en cours de semaine. Choisissez la découpe pour lire la composition du stock.</p>
+  <div class="section-head"><span class="section-num">03</span><h2>Annonces publiées par jour</h2></div>
+  <p class="section-desc">Nombre d'annonces dont la première détection par le robot de veille tombe sur ce jour-là.
+  C'est la date à laquelle l'annonce est <em>entrée dans la veille</em>, pas nécessairement sa date de mise en ligne
+  réelle sur le site : si la veille a eu un trou (voir notes en bas de page), les annonces publiées pendant ce trou
+  remontent toutes le jour où la collecte a repris, formant un pic artificiel.</p>
   <div class="card">
-    <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; margin-bottom:16px;">
-      <div class="fgroup">
-        <span class="flabel">Découpe des barres</span>
-        <div class="seg" id="seg-split">
-          <button data-v="none" class="on">Aucune</button>
-          <button data-v="frein">Freins</button>
-          <button data-v="transmission">Transmission</button>
-          <button data-v="materiau">Matériau</button>
-        </div>
-      </div>
-      <div class="fgroup">
-        <span class="flabel">Unité</span>
-        <div class="seg" id="seg-unit">
-          <button data-v="abs" class="on">Annonces</button>
-          <button data-v="pct">%</button>
-        </div>
-      </div>
-    </div>
+    <h3>Nombre d'annonces publiées par jour</h3>
     <div class="chart-box tall"><canvas id="chart-week"></canvas></div>
     <p class="card-sub" id="week-sub" style="margin-top:14px;"></p>
   </div>
@@ -810,39 +794,6 @@ function priceByYear(rows){
 }
 
 /* ==========================================================================
-   SEMAINES
-   ========================================================================== */
-function mondayOf(d){
-  const x = new Date(d.getTime());
-  const day = (x.getUTCDay() + 6) % 7;      // lundi = 0
-  x.setUTCDate(x.getUTCDate() - day);
-  x.setUTCHours(0, 0, 0, 0);
-  return x;
-}
-function weekLabel(monday){
-  const t = new Date(monday.getTime());
-  t.setUTCDate(t.getUTCDate() + 3);          // jeudi de la semaine ISO
-  const jan1 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-  const week = Math.ceil(((t - jan1) / DAY + 1) / 7);
-  const dd = String(monday.getUTCDate()).padStart(2, '0');
-  const mm = String(monday.getUTCMonth() + 1).padStart(2, '0');
-  return 'S' + week + '\u2009· ' + dd + '/' + mm;
-}
-/* liste des semaines couvertes par la période filtrée */
-function weekBuckets(rows){
-  const dates = rows.map(r => r.d1).filter(Boolean);
-  if (!dates.length) return [];
-  let start = mondayOf(F.from && F.from > META.min ? F.from : new Date(Math.min.apply(null, dates)));
-  const endSource = F.to && F.to < META.max ? F.to : META.max;
-  const end = mondayOf(endSource);
-  const weeks = [];
-  for (let d = new Date(start.getTime()); d <= end; d.setUTCDate(d.getUTCDate() + 7)){
-    const mo = new Date(d.getTime()), su = new Date(d.getTime() + 6 * DAY);
-    weeks.push({ start: mo, end: su, label: weekLabel(mo) });
-  }
-  return weeks;
-}
-/* ==========================================================================
    RENDU — RÉGLAGES COMMUNS
    ========================================================================== */
 const C = {
@@ -1039,86 +990,57 @@ function renderSize(){
 }
 
 /* ==========================================================================
-   03 — SEMAINES
+   03 — PUBLICATIONS PAR JOUR
    ========================================================================== */
-const SPLITS = {
-  none: { label: 'Annonces actives', field: null, values: [] },
-  frein: { label: 'Freins', field: 'freinType', values: ['Disque', 'Jante', 'Autre', NR] },
-  transmission: { label: 'Transmission', field: 'transmission', values: ['Électronique', 'Mécanique', 'Autre', NR] },
-  materiau: { label: 'Matériau', field: 'materiau', values: ['Carbone', 'Aluminium', 'Acier', 'Titane', 'Autre', NR] }
-};
-const SPLIT_COLORS = ['#1F3A5F', '#B5432B', '#5C7A33', '#B8862E', '#4A6688', '#9AA3AC'];
-let splitMode = 'none', unitMode = 'abs';
+function renderDay(){
+  // Une annonce compte une seule fois, le jour de sa première détection —
+  // contrairement à l'ancienne vue par semaine, pas de double-compte sur
+  // plusieurs jours. Le scope "actives uniquement" ne s'applique pas ici
+  // (une annonce publiée puis disparue doit quand même apparaître le jour
+  // de sa publication) ; la source et la période de dates, oui.
+  const from = F.from && F.from > META.min ? F.from : META.min;
+  const to = F.to && F.to < META.max ? F.to : META.max;
 
-function renderWeek(){
-  // le périmètre « actives uniquement » n'a pas de sens ici : on repart de toutes les annonces
-  const rows = ALL.filter(r => (!F.source || r.source === F.source) && r.d1);
-  const weeks = weekBuckets(rows);
-  const spec = SPLITS[splitMode];
-  const cats = spec.field ? spec.values : ['Annonces actives'];
-
-  const matrix = cats.map(() => weeks.map(() => 0));
-  weeks.forEach((w, wi) => {
-    rows.forEach(r => {
-      const end = r.d2 || r.d1;
-      if (r.d1 <= w.end && end >= w.start){
-        let ci = 0;
-        if (spec.field){
-          ci = cats.indexOf(r[spec.field]);
-          if (ci < 0) ci = cats.indexOf('Autre');
-          if (ci < 0) ci = cats.length - 1;
-        }
-        matrix[ci][wi]++;
-      }
-    });
+  const counts = new Map();
+  for (let d = new Date(from.getTime()); d <= to; d.setUTCDate(d.getUTCDate() + 1)){
+    counts.set(isoDay(d), 0);
+  }
+  ALL.forEach(r => {
+    if (F.source && r.source !== F.source) return;
+    if (!r.d1 || r.d1 < from || r.d1 > to) return;
+    const k = isoDay(r.d1);
+    if (counts.has(k)) counts.set(k, counts.get(k) + 1);
   });
 
-  const totals = weeks.map((_, wi) => cats.reduce((s, c, ci) => s + matrix[ci][wi], 0));
-  weeks.forEach(w => { w.partial = (w.start < META.min || w.end > META.max); });
-  const datasets = cats.map((c, ci) => ({
-    label: c,
-    data: matrix[ci].map((v, wi) => unitMode === 'pct' ? (totals[wi] ? v / totals[wi] * 100 : 0) : v),
-    backgroundColor: SPLIT_COLORS[ci % SPLIT_COLORS.length],
-    borderWidth: 0,
-    stack: 's'
-  }));
+  const labels = Array.from(counts.keys());
+  const data = Array.from(counts.values());
 
   draw('chart-week', {
     type: 'bar',
-    data: { labels: weeks.map(w => w.label + (w.partial ? ' *' : '')), datasets },
+    data: { labels, datasets: [{ label: 'Annonces publiées', data, backgroundColor: rgba(C.steel, .78), borderWidth: 0 }] },
     options: {
       plugins: {
-        legend: { display: splitMode !== 'none', position: 'bottom', labels: { boxWidth: 12, boxHeight: 12, padding: 16 } },
-        tooltip: {
-          callbacks: {
-            label: it => it.dataset.label + ' : ' + (unitMode === 'pct'
-              ? fmtPct(it.parsed.y, 1)
-              : fmtN(it.parsed.y) + ' annonces'),
-            footer: it => 'Total semaine : ' + fmtN(totals[it[0].dataIndex]) + ' annonces'
-          }
-        }
+        legend: { display: false },
+        tooltip: { callbacks: { title: it => it[0].label, label: it => fmtN(it.parsed.y) + ' annonce(s) publiée(s)' } }
       },
       scales: {
-        x: { grid: { display: false }, stacked: true },
+        x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 0, autoSkip: true, maxTicksLimit: 24 } },
         y: {
-          stacked: true, beginAtZero: true, grid: { color: C.line },
-          max: unitMode === 'pct' ? 100 : undefined,
-          title: { display: true, text: unitMode === 'pct' ? 'Part des annonces actives (%)' : "Annonces actives dans la semaine" },
-          ticks: { callback: v => unitMode === 'pct' ? v + ' %' : fmtN(v) }
+          beginAtZero: true, grid: { color: C.line }, ticks: { callback: v => fmtN(v) },
+          title: { display: true, text: "Annonces publiées" }
         }
       }
     }
   });
 
-  const last = weeks.length ? totals[totals.length - 1] : 0;
-  const prev = weeks.length > 1 ? totals[totals.length - 2] : null;
-  const delta = (prev && prev > 0) ? ((last - prev) / prev * 100) : null;
-  const nPartial = weeks.filter(w => w.partial).length;
+  const total = data.reduce((a, b) => a + b, 0);
+  const avgPerDay = labels.length ? total / labels.length : 0;
+  const maxIdx = data.length ? data.indexOf(Math.max.apply(null, data)) : -1;
   document.getElementById('week-sub').textContent =
-    weeks.length + ' semaine(s) couverte(s). Dernière semaine : ' + fmtN(last) + ' annonces actives' +
-    (delta != null ? ' (' + (delta >= 0 ? '+' : '−') + fmtPct(Math.abs(delta), 1) + ' vs semaine précédente).' : '.') +
-    (nPartial ? ' Les semaines marquées d\'une étoile ne sont couvertes qu\'en partie par la veille : leur total est mécaniquement plus bas.' : '') +
-    ' Le filtre « actives uniquement » ne s\'applique pas ici : une annonce compte pour chaque semaine où elle était en ligne.';
+    labels.length + ' jour(s) couvert(s), ' + fmtN(total) + ' annonce(s) publiée(s) au total (' +
+    fmtN(Math.round(avgPerDay * 10) / 10) + ' en moyenne par jour)' +
+    (maxIdx >= 0 && data[maxIdx] > 0 ? ', pic le ' + labels[maxIdx] + ' (' + fmtN(data[maxIdx]) + ' annonces).' : '.') +
+    ' « Publiée » correspond à la date de première détection par le robot, pas forcément à la date de mise en ligne réelle sur le site.';
 }
 
 /* ==========================================================================
@@ -1395,14 +1317,12 @@ function wireSeg(id, cb){
 }
 
 function renderAll(){
-  renderHero(); renderAge(); renderSize(); renderWeek();
+  renderHero(); renderAge(); renderSize(); renderDay();
   refreshBuilder(); renderChips(); renderComboSection(); renderDuration();
 }
 
 function wireControls(){
   wireSeg('seg-scope', v => { F.scope = v; renderAll(); });
-  wireSeg('seg-split', v => { splitMode = v; renderWeek(); });
-  wireSeg('seg-unit', v => { unitMode = v; renderWeek(); });
   wireSeg('seg-censor', v => { censorMode = v; renderDuration(); });
   wireSeg('seg-filterout', v => { filterOutMode = v; renderDuration(); });
 

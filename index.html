@@ -268,15 +268,16 @@
 
 <div class="roadline"></div>
 
-<!-- ============ 3. PUBLICATIONS PAR JOUR ============ -->
+<!-- ============ 3. PUBLICATIONS PAR SEMAINE ============ -->
 <section>
-  <div class="section-head"><span class="section-num">03</span><h2>Annonces publiées par jour</h2></div>
-  <p class="section-desc">Nombre d'annonces dont la première détection par le robot de veille tombe sur ce jour-là.
-  C'est la date à laquelle l'annonce est <em>entrée dans la veille</em>, pas nécessairement sa date de mise en ligne
-  réelle sur le site : si la veille a eu un trou (voir notes en bas de page), les annonces publiées pendant ce trou
-  remontent toutes le jour où la collecte a repris, formant un pic artificiel.</p>
+  <div class="section-head"><span class="section-num">03</span><h2>Annonces publiées par semaine</h2></div>
+  <p class="section-desc">Nombre d'annonces dont la première détection par le robot de veille tombe dans cette
+  semaine-là (semaine ISO, du lundi au dimanche). C'est la date à laquelle l'annonce est <em>entrée dans la
+  veille</em>, pas nécessairement sa date de mise en ligne réelle sur le site : si la veille a eu un trou (voir
+  notes en bas de page), les annonces publiées pendant ce trou remontent toutes la semaine où la collecte a repris,
+  formant un pic artificiel.</p>
   <div class="card">
-    <h3>Nombre d'annonces publiées par jour</h3>
+    <h3>Nombre d'annonces publiées par semaine</h3>
     <div class="chart-box tall"><canvas id="chart-week"></canvas></div>
     <p class="card-sub" id="week-sub" style="margin-top:14px;"></p>
   </div>
@@ -990,30 +991,52 @@ function renderSize(){
 }
 
 /* ==========================================================================
-   03 — PUBLICATIONS PAR JOUR
+   03 — PUBLICATIONS PAR SEMAINE
    ========================================================================== */
-function renderDay(){
-  // Une annonce compte une seule fois, le jour de sa première détection —
-  // contrairement à l'ancienne vue par semaine, pas de double-compte sur
-  // plusieurs jours. Le scope "actives uniquement" ne s'applique pas ici
-  // (une annonce publiée puis disparue doit quand même apparaître le jour
-  // de sa publication) ; la source et la période de dates, oui.
+function mondayOf(d){
+  const x = new Date(d.getTime());
+  const day = (x.getUTCDay() + 6) % 7;      // lundi = 0
+  x.setUTCDate(x.getUTCDate() - day);
+  x.setUTCHours(0, 0, 0, 0);
+  return x;
+}
+function weekLabel(monday){
+  const t = new Date(monday.getTime());
+  t.setUTCDate(t.getUTCDate() + 3);          // jeudi de la semaine ISO
+  const jan1 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t - jan1) / DAY + 1) / 7);
+  const dd = String(monday.getUTCDate()).padStart(2, '0');
+  const mm = String(monday.getUTCMonth() + 1).padStart(2, '0');
+  return 'S' + week + '\u2009· ' + dd + '/' + mm;
+}
+
+function renderWeek(){
+  // Même logique que la vue par jour (une annonce compte une seule fois, la
+  // semaine de sa première détection) — juste regroupée par semaine ISO au
+  // lieu du jour. Le scope "actives uniquement" ne s'applique pas ici (une
+  // annonce publiée puis disparue doit quand même apparaître) ; la source
+  // et la période de dates, oui.
   const from = F.from && F.from > META.min ? F.from : META.min;
   const to = F.to && F.to < META.max ? F.to : META.max;
 
-  const counts = new Map();
-  for (let d = new Date(from.getTime()); d <= to; d.setUTCDate(d.getUTCDate() + 1)){
-    counts.set(isoDay(d), 0);
+  const weeks = [];
+  for (let d = mondayOf(from); d <= to; d.setUTCDate(d.getUTCDate() + 7)){
+    const mo = new Date(d.getTime()), su = new Date(d.getTime() + 6 * DAY);
+    weeks.push({
+      start: mo, end: su, label: weekLabel(mo), count: 0,
+      partial: (mo < META.min || su > META.max)
+    });
   }
+
   ALL.forEach(r => {
     if (F.source && r.source !== F.source) return;
     if (!r.d1 || r.d1 < from || r.d1 > to) return;
-    const k = isoDay(r.d1);
-    if (counts.has(k)) counts.set(k, counts.get(k) + 1);
+    const wk = weeks.find(w => r.d1 >= w.start && r.d1 <= w.end);
+    if (wk) wk.count++;
   });
 
-  const labels = Array.from(counts.keys());
-  const data = Array.from(counts.values());
+  const labels = weeks.map(w => w.label + (w.partial ? ' *' : ''));
+  const data = weeks.map(w => w.count);
 
   draw('chart-week', {
     type: 'bar',
@@ -1034,12 +1057,14 @@ function renderDay(){
   });
 
   const total = data.reduce((a, b) => a + b, 0);
-  const avgPerDay = labels.length ? total / labels.length : 0;
+  const avgPerWeek = weeks.length ? total / weeks.length : 0;
   const maxIdx = data.length ? data.indexOf(Math.max.apply(null, data)) : -1;
+  const nPartial = weeks.filter(w => w.partial).length;
   document.getElementById('week-sub').textContent =
-    labels.length + ' jour(s) couvert(s), ' + fmtN(total) + ' annonce(s) publiée(s) au total (' +
-    fmtN(Math.round(avgPerDay * 10) / 10) + ' en moyenne par jour)' +
-    (maxIdx >= 0 && data[maxIdx] > 0 ? ', pic le ' + labels[maxIdx] + ' (' + fmtN(data[maxIdx]) + ' annonces).' : '.') +
+    weeks.length + ' semaine(s) couverte(s), ' + fmtN(total) + ' annonce(s) publiée(s) au total (' +
+    fmtN(Math.round(avgPerWeek * 10) / 10) + ' en moyenne par semaine)' +
+    (maxIdx >= 0 && data[maxIdx] > 0 ? ', pic la semaine du ' + weeks[maxIdx].label.replace(/^S\d+\u2009· /, '') + ' (' + fmtN(data[maxIdx]) + ' annonces).' : '.') +
+    (nPartial ? ' Les semaines marquées d\'une étoile ne sont couvertes qu\'en partie par la veille : leur total est mécaniquement plus bas.' : '') +
     ' « Publiée » correspond à la date de première détection par le robot, pas forcément à la date de mise en ligne réelle sur le site.';
 }
 
@@ -1317,7 +1342,7 @@ function wireSeg(id, cb){
 }
 
 function renderAll(){
-  renderHero(); renderAge(); renderSize(); renderDay();
+  renderHero(); renderAge(); renderSize(); renderWeek();
   refreshBuilder(); renderChips(); renderComboSection(); renderDuration();
 }
 

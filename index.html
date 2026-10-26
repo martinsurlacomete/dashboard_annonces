@@ -368,6 +368,50 @@
   </div>
 </section>
 
+<div class="roadline"></div>
+
+<!-- ============ 6. ANOMALIES ============ -->
+<section>
+  <div class="section-head"><span class="section-num">06</span><h2>Anomalies</h2></div>
+  <p class="section-desc">Contrôles recalculés après chaque scan par la base. Les journées anormales trahissent
+  une panne ou un rattrapage de collecte ; les annonces suspectes signalent un prix aberrant, une erreur de
+  saisie, une bonne affaire possible ou une annonce qui n'est pas un vélo complet. Ces listes ne suivent pas les
+  filtres du haut de page.</p>
+  <div id="anomalies-status" class="card-sub"></div>
+
+  <div class="card">
+    <h3>Journées anormales</h3>
+    <p class="card-sub">Par source, comparées à la médiane des 14 jours de collecte précédents.</p>
+    <div class="table-scroll">
+      <table><thead><tr>
+        <th>Jour</th><th>Source</th><th>Gravité</th><th>Constat</th>
+      </tr></thead><tbody id="anomalies-jours"></tbody></table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px;">
+    <h3>Annonces suspectes</h3>
+    <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; margin:10px 0 14px;">
+      <div class="fgroup">
+        <span class="flabel">Type</span>
+        <div class="seg" id="seg-anomalie"></div>
+      </div>
+      <div class="fgroup">
+        <span class="flabel">Annonces</span>
+        <div class="seg" id="seg-anomalie-ligne">
+          <button data-v="tout" class="on">Toutes</button>
+          <button data-v="oui">En ligne</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-scroll" style="max-height:480px;">
+      <table><thead><tr>
+        <th>Gravité</th><th>Annonce</th><th>Source</th><th class="num">Prix</th><th class="num">Référence</th><th>Constat</th>
+      </tr></thead><tbody id="anomalies-annonces"></tbody></table>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="roadline" style="margin-bottom:24px;"></div>
   <h3>Comment lire ces chiffres</h3>
@@ -1378,6 +1422,81 @@ async function fetchSupabaseRows(){
 }
 
 /* ==========================================================================
+   ANOMALIES (tables calculées par detecter_anomalies() côté base)
+   ========================================================================== */
+const ANOMALIE_LABELS = {
+  prix_hors_limites: 'Prix aberrant', prix_tres_bas: 'Prix très bas', prix_tres_eleve: 'Prix très élevé',
+  saut_de_prix: 'Saut de prix', annee_incoherente: 'Année incohérente', pas_un_velo_complet: 'Pas un vélo complet'
+};
+const GRAVITE_TAGS = { 3: ['bad', 'Erreur probable'], 2: ['warn', 'À vérifier'], 1: ['good', 'Info'] };
+let ANOMALIES = [], anomalieType = '', anomalieLigne = 'tout';
+
+async function fetchAll(path){
+  const pageSize = 1000, rows = [];
+  for (let offset = 0; ; offset += pageSize){
+    const url = SUPABASE_URL + '/rest/v1/' + path + '&limit=' + pageSize + '&offset=' + offset;
+    const resp = await fetch(url, { cache: 'no-store', headers: { apikey: SUPABASE_KEY } });
+    if (!resp.ok) throw new Error('Supabase, réponse HTTP ' + resp.status);
+    const page = await resp.json();
+    rows.push.apply(rows, page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
+function graviteTag(g){
+  const t = GRAVITE_TAGS[g] || GRAVITE_TAGS[1];
+  return '<span class="tag ' + t[0] + '">' + t[1] + '</span>';
+}
+
+function renderAnomaliesAnnonces(){
+  const rows = ANOMALIES.filter(a => (!anomalieType || a.regle === anomalieType) &&
+    (anomalieLigne === 'tout' || (a.annonces && a.annonces.encore_en_ligne === 'Oui')));
+  document.getElementById('anomalies-annonces').innerHTML = rows.length ? rows.slice(0, 500).map(a => {
+    const an = a.annonces || {};
+    const titre = esc(an.titre || a.annonce_id);
+    return '<tr><td>' + graviteTag(a.gravite) + '</td>' +
+      '<td>' + (an.url ? '<a href="' + esc(an.url) + '" target="_blank" rel="noopener">' + titre + '</a>' : titre) +
+      '<div class="card-sub" style="margin:0">' + esc(ANOMALIE_LABELS[a.regle] || a.regle) + '</div></td>' +
+      '<td>' + esc(an.source || '') + '</td>' +
+      '<td class="num">' + (an.prix != null ? fmtEUR(an.prix) : '') + '</td>' +
+      '<td class="num">' + (a.reference != null ? fmtEUR(a.reference) : '') + '</td>' +
+      '<td>' + esc(a.raison) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6">Aucune annonce suspecte pour ce filtre.</td></tr>';
+}
+
+async function initAnomalies(){
+  const status = document.getElementById('anomalies-status');
+  try {
+    const [jours, annonces] = await Promise.all([
+      fetchAll('anomalies_jours?select=*&order=jour.desc,source'),
+      fetchAll('anomalies_annonces?select=*,annonces(titre,source,prix,url,encore_en_ligne)&order=gravite.desc,annonce_id')
+    ]);
+    ANOMALIES = annonces;
+
+    document.getElementById('anomalies-jours').innerHTML = jours.length ? jours.map(j =>
+      '<tr><td class="mono">' + esc(j.jour) + '</td><td>' + esc(j.source) + '</td><td>' + graviteTag(j.gravite) +
+      '</td><td>' + esc(j.raison) + '</td></tr>').join('') :
+      '<tr><td colspan="4">Aucune journée anormale.</td></tr>';
+
+    const counts = {};
+    annonces.forEach(a => { counts[a.regle] = (counts[a.regle] || 0) + 1; });
+    const seg = document.getElementById('seg-anomalie');
+    seg.innerHTML = '<button data-v="" class="on">Toutes (' + fmtN(annonces.length) + ')</button>' +
+      Object.keys(ANOMALIE_LABELS).filter(k => counts[k]).map(k =>
+        '<button data-v="' + k + '">' + ANOMALIE_LABELS[k] + ' (' + fmtN(counts[k]) + ')</button>').join('');
+    wireSeg('seg-anomalie', v => { anomalieType = v; renderAnomaliesAnnonces(); });
+    wireSeg('seg-anomalie-ligne', v => { anomalieLigne = v; renderAnomaliesAnnonces(); });
+
+    const dernier = jours.concat(annonces).map(a => a.derniere_detection).sort().pop();
+    status.textContent = dernier ? 'Dernière détection le ' + dernier + '.' : '';
+    renderAnomaliesAnnonces();
+  } catch (e){
+    status.textContent = 'Anomalies indisponibles (' + e.message + ').';
+    console.error(e);
+  }
+}
+
+/* ==========================================================================
    INITIALISATION
    ========================================================================== */
 async function init(){
@@ -1409,6 +1528,7 @@ async function init(){
   }
 }
 init();
+initAnomalies();
 </script>
 </body>
 </html>

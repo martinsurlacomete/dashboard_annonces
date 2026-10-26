@@ -202,9 +202,9 @@
 <header>
   <div class="eyebrow">Veille automatisée · buycycle + troc-vélo</div>
   <h1>Marché du vélo d'occasion</h1>
-  <p class="sub">Cinq outils d'analyse branchés en direct sur le Google Sheet de veille : âge du parc, tailles de cadre,
+  <p class="sub">Cinq outils d'analyse branchés en direct sur la base de veille : âge du parc, tailles de cadre,
   volume d'annonces actives, courbes de prix par configuration et durée de mise en ligne.</p>
-  <div id="live-status" class="live-status">Chargement des données depuis le Google Sheet…</div>
+  <div id="live-status" class="live-status">Chargement des données…</div>
   <div class="hero-stats" id="hero-stats"></div>
 </header>
 
@@ -372,7 +372,7 @@
   <div class="roadline" style="margin-bottom:24px;"></div>
   <h3>Comment lire ces chiffres</h3>
   <ul>
-    <li><b>Source</b> — Google Sheet de veille, lu à chaque ouverture de la page. Aucune donnée n'est figée dans ce fichier.</li>
+    <li><b>Source</b> — base Supabase de veille (Google Sheet en secours), lue à chaque ouverture de la page. Aucune donnée n'est figée dans ce fichier.</li>
     <li><b>Âge</b> — année en cours moins l'année du modèle déclarée. Les annonces sans année (ou avec une année aberrante) sont écartées des sections 01 et 04.</li>
     <li><b>Génération et modèle de frein</b> — déduits du titre et du descriptif de l'annonce quand la colonne n'existe pas dans le Sheet. Ajoutez une colonne « Génération » ou « Modèle de frein » au Sheet et elle sera utilisée en priorité.</li>
     <li><b>Perte de valeur</b> — pente d'une régression sur le logarithme du prix en fonction de l'âge, exprimée en % par an. Elle compare des vélos différents à un instant donné : ce n'est pas le suivi d'un même vélo dans le temps.</li>
@@ -388,6 +388,11 @@
 /* ==========================================================================
    SOURCE
    ========================================================================== */
+/* Base Supabase (lecture seule, clé publishable : elle peut être publique,
+   les droits d'écriture sont bloqués côté base). Le Google Sheet reste en
+   secours tant que la base est vide ou injoignable. */
+const SUPABASE_URL = "https://vqiewaidzngvlechmgtc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_y10J0DMsoK9vMv-aFNUlDw_vzJ2uPMJ";
 const CSV_URL = "https://docs.google.com/spreadsheets/d/129nOvjsJlgMcAK_R2rZsGntosPGqkP2PBKiOhL1uSuU/gviz/tq?tqx=out:csv&gid=0";
 const CURRENT_YEAR = new Date().getFullYear();
 const NR = "Non renseigné";
@@ -1382,15 +1387,52 @@ function wireControls(){
 }
 
 /* ==========================================================================
+   LECTURE SUPABASE
+   ========================================================================== */
+/* Renvoie des lignes au même format que parseCSV : les colonnes de la base
+   (premiere_detection…) donnent la même clé que les en-têtes du Sheet
+   (« Première détection ») une fois passées dans key(). */
+async function fetchSupabaseRows(){
+  const pageSize = 1000, rows = [];
+  for (let offset = 0; ; offset += pageSize){
+    const url = SUPABASE_URL + '/rest/v1/annonces?select=*&order=id&limit=' + pageSize + '&offset=' + offset;
+    const resp = await fetch(url, { cache: 'no-store', headers: { apikey: SUPABASE_KEY } });
+    if (!resp.ok) throw new Error('Supabase, réponse HTTP ' + resp.status);
+    const page = await resp.json();
+    page.forEach(rec => {
+      const o = {};
+      for (const k in rec){ o[key(k)] = rec[k] === null ? '' : String(rec[k]); }
+      rows.push(o);
+    });
+    if (page.length < pageSize) return rows;
+  }
+}
+
+async function fetchSheetRows(){
+  const resp = await fetch(CSV_URL, { cache: 'no-store' });
+  if (!resp.ok) throw new Error('Google Sheet, réponse HTTP ' + resp.status);
+  return parseCSV(await resp.text());
+}
+
+async function loadRows(){
+  try {
+    const rows = await fetchSupabaseRows();
+    if (rows.length) return { rows, from: 'Supabase' };
+    console.warn('Base Supabase vide, lecture du Google Sheet.');
+  } catch (e){
+    console.warn('Lecture Supabase impossible, lecture du Google Sheet.', e);
+  }
+  return { rows: await fetchSheetRows(), from: 'Google Sheet' };
+}
+
+/* ==========================================================================
    INITIALISATION
    ========================================================================== */
 async function init(){
   const status = document.getElementById('live-status');
   try {
-    const resp = await fetch(CSV_URL, { cache: 'no-store' });
-    if (!resp.ok) throw new Error('réponse HTTP ' + resp.status);
-    const rows = parseCSV(await resp.text());
-    if (!rows.length) throw new Error('le Sheet a répondu, mais aucune ligne exploitable');
+    const { rows, from } = await loadRows();
+    if (!rows.length) throw new Error(from + ' a répondu, mais aucune ligne exploitable');
     ALL = buildRows(rows);
 
     document.getElementById('sel-source').innerHTML = '<option value="">Toutes</option>' +
@@ -1402,7 +1444,7 @@ async function init(){
     F.from = META.min; F.to = META.max;
 
     status.className = 'live-status ok';
-    status.textContent = '● Données en direct — ' + fmtN(ALL.length) + ' annonces lues le ' +
+    status.textContent = '● Données en direct (' + from + ') — ' + fmtN(ALL.length) + ' annonces lues le ' +
       new Date().toLocaleString('fr-FR') + ' · veille du ' + isoDay(META.min) + ' au ' + isoDay(META.max);
 
     buildBuilder();
@@ -1410,8 +1452,8 @@ async function init(){
     renderAll();
   } catch (e){
     status.className = 'live-status error';
-    status.textContent = 'Lecture du Google Sheet impossible (' + e.message +
-      '). Vérifiez que le document est partagé en lecture publique, puis rechargez la page.';
+    status.textContent = 'Lecture des données impossible (' + e.message +
+      '). Ni la base Supabase ni le Google Sheet n\'ont répondu : rechargez la page.';
     console.error(e);
   }
 }
